@@ -1,7 +1,3 @@
-#############START############
-
-#setwd("..")
-
 #Source
 
 source("functions.R")
@@ -31,7 +27,7 @@ dat<-readRDS("data/Y_var.Rda")%>%
 
 out<-readRDS("data/X_var.Rda")
 
-##CLEANING AND STANDARIDSATION##
+#Cleaning
 
 tot<-left_join(out,dat)%>%
   mutate(fac_lat=as.character(lat),fac_lon=as.character(lon),fac_lat_jet=as.character(lat_jet))%>%
@@ -39,13 +35,10 @@ tot<-left_join(out,dat)%>%
   mutate(year=year(date))%>%
   as_tsibble(index=date,key=c(lat,lon))%>%
   fill_gaps()%>%
-  #group_by(lat,lon)%>%
   tk_augment_lags(c(jet_strength,NAO,US_temp,lat_jet,jet_proximity,wind,prec), .lags = c(1:15), .names = "auto")%>%
   tk_augment_leads(c(jet_strength,NAO,US_temp,lat_jet,jet_proximity,wind,prec), .lags = c(-1:-15), .names = "auto")%>%
-  #ungroup()%>%
   mutate(time_cont=as.integer(as.Date(date, "%Y-%m-%d")-as.Date("1959-01-01")))%>%
   filter(month(date)<3 | month(date)>10)%>%
-  #mutate(across(c(where(is.numeric)), scale))%>%
   mutate(month=month(date))%>%
   mutate(across(starts_with("fac"),as.numeric))%>%
   mutate(across(starts_with("fac"),round,digits=2))%>%
@@ -86,8 +79,7 @@ gh<-annotate_figure(ggarrange(g,h,hjust=-0.4,labels=c("g","h")),
 cdefgh<-annotate_figure(
   ggarrange(cd,ef,gh,nrow=3))
 
-######Figure 2 - Non-overlapping densities######
-
+#########Figure 2 - Non-overlapping densities######
 
 library(cowplot)
 library(ggridges)
@@ -213,10 +205,6 @@ prec_dens<-da%>%
 
 ab<-annotate_figure(ggarrange(wind_dens,prec_dens,nrow=2,labels=c("a","b"),common.legend = TRUE, legend = "bottom"))
 
-
-
-
-
 #Figure 2 - panel 
 annotate_figure(
   ggarrange(ab,cdefgh, ncol = 2),
@@ -224,9 +212,7 @@ annotate_figure(
             )
   )
 
-
-
-######## FIGURE 1 ##############
+######## Figure 1 ##############
 
 #Requires US_temps (2m temperature anomalies over North America) as input  
 
@@ -235,13 +221,13 @@ cold_days<-POT_cold_spell_monte_mean(tot,US_temp,wind,0.05,B=1)$dat%>%
 
 cold_days<-cold_days%>%mutate(date=as.character(date))%>%pull(date)
 
-Temps<-readRDS("new_data/daily_2m_temp.RDS")%>%
+Temps<-readRDS("data/daily_2m_temp.RDS")%>%
   filter(time>"1959-4-01"& time<"2022-09-01")%>%
   mutate(longitude=if_else(longitude<0, longitude+360,longitude))%>%
   rename(lon=longitude,lat=latitude,date=time,air=t2m)
 
 
-Land_Sea_05<-hyper_tibble("new_data/land_sea_05.nc")%>%
+Land_Sea_05<-hyper_tibble("data/land_sea_05.nc")%>%
   select(-time)%>%
   mutate(lsm=if_else(lsm>0.5,1,0))%>%
   rename(land=lsm,lon=longitude,lat=latitude)

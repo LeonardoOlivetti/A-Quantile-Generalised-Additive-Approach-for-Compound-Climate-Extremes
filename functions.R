@@ -1,4 +1,4 @@
-####Quantile Models
+#########Bias computation and plotting ############
 
 Quant_eval<-function(predicted,variable,qu,test){
   srd_place<-test%>%
@@ -43,7 +43,7 @@ overpred<-function(dat,qu,direc=1,low_lim,up_lim,midpo){
 }
 
 
-
+#########Pseudo R2 computation and plotting##########
 
 rho <- function(u,tau){pmax(tau * u, (tau - 1) * u)}
 
@@ -413,7 +413,7 @@ over_pick_and_mean_fix_th<-function(dat,var,var_in,qu,thresho){
   return(res[,1])
 }
 
-##################PERMUTATION TESTS###############
+##################EVT function and monte carlo significance tests###############
 
 under_pick_and_mean_fix_monte<-function(dat_tot,var_in,var_out,len){
   
@@ -486,7 +486,7 @@ POT_cold_spell_monte_mean<-function(dat,in_var,out_var,qu=0.05,B=5,seed=3){
 }
 
 
-###################QUANTILE#################
+#quantile
 
 under_pick_and_qu_fix_monte<-function(dat_tot,var_in,var_out,len,qu_out=qu_out){
   
@@ -564,7 +564,7 @@ POT_cold_spell_monte_qu<-function(dat,in_var,out_var,qu_in=0.05,qu_out=0.95,B=5,
   return(l)
 }
 
-
+#declustering
 POT_declust_out<-function(dat,out_var,qu,over=TRUE,span=length(year_samp),declust=FALSE){
   
   
@@ -584,7 +584,6 @@ POT_declust_out<-function(dat,out_var,qu,over=TRUE,span=length(year_samp),declus
       distinct(date,.keep_all = TRUE)%>%
       dplyr::select(date)%>%
       mutate(date=as.Date(date))%>%
-      #filter(big_jet==1)%>%
       arrange(date)%>%
       mutate(id2 = cumsum(c(T, diff(date) <= 1)))%>%
       group_by(id2)%>%
