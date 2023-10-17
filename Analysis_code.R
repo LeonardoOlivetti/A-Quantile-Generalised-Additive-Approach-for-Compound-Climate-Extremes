@@ -1,17 +1,16 @@
-#############START############
-
-#setwd("..")
-
-#setwd("ERA_5_data_import")
+#Notes
+#lat - latitude of the point in Western Europe
+#lon - longitude of the point in Western Europe
+#prec - daily total precipitation, anomaly in mm at the surface
+#wind - daily mean wind speed anomaly at 10m height, meters per second
+#temp - daily mean temperature anomaly at 2m height, kelvin 
 
 #Source
 
 source("functions.R")
-source("functions_EVT.R")
 
 #Packages
-library(tidyverse) # package for plotting
-library(beepr) # beeeeep
+library(tidyverse)
 library(tseries)
 library(qgam)
 library(mgcv)
@@ -31,59 +30,20 @@ library(evgam)
 library(quantreg)
 library(sf)
 library(scales)
-library(WRTDStidal)
+library(ggpattern)
+library(metR)
 
 #Notes
 
-#https://psl.noaa.gov/data/gridded/data.ncep.reanalysis.html
-
 
 #load_data
-dat<-readRDS("new_data/dat.Rda")%>%
+dat<-readRDS("data/X_var.Rda")%>%
   mutate(date=as.character(date))
 
-out<-readRDS("new_data/Out_var.Rda")
+out<-readRDS("data/Y_var.Rda")
 
-#qu_list<-c(0.8,0.9,0.95,96,0.97,0.98,0.99,0.995,0.999)
 
 ##CLEANING AND STANDARIDSATION##
-
-'X<-dat%>%
-  mutate(date=as_date(date))%>%
-  as_tsibble(index=date)%>%
-  fill_gaps()%>%
-  tk_augment_lags(c(jet_strength,NAO,US_temp,lat_jet), .lags = c(1:2), .names = "auto")%>%
-  tk_augment_leads(c(jet_strength,NAO,US_temp,lat_jet), .lags = c(-1:-2), .names = "auto")%>%
-  filter(month(date)<3 | month(date)>10)%>%
-  mutate(across(starts_with("la"),as.character,.names = "fac_{.col}" ))%>%
-  mutate(across(c(where(is.numeric)), scale))%>%
-  mutate(across(starts_with("fac"),as.numeric))%>%
-  mutate(across(starts_with("fac"),round,digits=2))%>%
-  filter(date>"1959-3-31"& date<"2022-09-01")%>%
-  group_by(year(date),month(date))%>%
-  mutate(season_year=ceiling(cur_group_id()/4))%>%
-  ungroup()%>%
-  mutate(month=as.factor(month(date)))%>%
-  mutate(date=as.character(date))
-
-Y<-out%>%
-  mutate(fac_lat=as.character(lat),fac_lon=as.character(lon))%>%
-  mutate(date=as_date(date),lon=ifelse(lon<5,lon+360,lon))%>%
-  group_by(lon,lat)%>%
-  tk_augment_lags(., c(wind,prec), .lags = c(1:2), .names = "auto")%>%
-  tk_augment_leads(., c(wind,prec), .lags = -1:-2, .names = "auto")%>%
-  ungroup()%>%
-  mutate(time_cont=as.integer(as.Date(date, "%Y-%m-%d")-as.Date("1959-01-01")))%>%
-  filter(month(date)<3 | month(date)>10)%>%
-  mutate(across(c(where(is.numeric)), scale))%>%
-  mutate(fac_lat=as.numeric(fac_lat),fac_lon=as.numeric(fac_lon))%>%
-  mutate(across(starts_with("fac"),round,digits=2))%>%
-  filter(date>"1959-3-31"& date<"2022-09-01")%>%
-  group_by(year(date),month(date))%>%
-  mutate(season_year=ceiling(cur_group_id()/4))%>%
-  ungroup()%>%
-  mutate(month=as.factor(month(date)))%>%
-  mutate(date=as.character(date))'
 
 tot<-left_join(out,dat)%>%
   mutate(fac_lat=as.character(lat),fac_lon=as.character(lon),fac_lat_jet=as.character(lat_jet))%>%
@@ -110,7 +70,6 @@ gc()
 
 
 #Train-test split
-
 
 set.seed(23)
 year_samp<-tot%>%
@@ -145,7 +104,7 @@ tot_train<-tot_train%>%
 
 
 clim<-tot_train%>%
-  dplyr::select(fac_lat,fac_lon,qu_95_wind,qu_99_wind,qu_95_prec,qu_99_prec)%>%
+  select(fac_lat,fac_lon,qu_95_wind,qu_99_wind,qu_95_prec,qu_99_prec)%>%
   distinct(fac_lat,fac_lon,.keep_all = TRUE)
   
 tot_val<-tot_val%>%
@@ -154,39 +113,81 @@ tot_val<-tot_val%>%
 tot_test<-tot_test%>%
   left_join(clim,by=c("fac_lat","fac_lon"))
 
+#########QGAMS###########
 
-#tot_train<-left_join(Y_train,X)%>%
-  #mutate(lat=as.numeric(lat),lon=as.numeric(lon),h=as.numeric(h))
-#tot_val<-left_join(Y_left,X)%>%
-  #mutate(lat=as.numeric(lat),lon=as.numeric(lon),h=as.numeric(h))
-#tot_test<-left_join(Y_test,X)%>%
-  #mutate(lat=as.numeric(lat),lon=as.numeric(lon),h=as.numeric(h))
-#tot_test<-setdiff(tot,tot_train)
-"X_train<-tot_train%>%
-  select(-colnames(Y_train%>%select(-date)))
-X_test<-tot_test%>%
-  select(-colnames(Y_train%>%select(-date)))"
+#Wind
 
-gc()
+q_base_95_wind<-qgam(wind~
+                       s(lat,lon,k=20)+
+                       s(time_cont,k=5)+month+qu_95_wind,data=tot_train,qu=0.95)
+
+q_cold_95_wind<-qgam(wind~
+                       s(lat,lon,k=20)+
+                       s(time_cont,k=5)+
+                       s(US_temp_lag2,k=5)+month+qu_95_wind,data=tot_train,qu=0.95)
+
+q_jet_95_wind<-qgam(wind~
+                      s(lat,lon,k=20)+
+                      s(time_cont,k=5)+s(US_temp_lag2,k=5)+
+                      s(jet_strength_lag1)+s(lat_jet_lag1)+
+                      s(jet_proximity_lag1)+
+                      s(NAO_lag1,k=5)+month+qu_95_wind,data=tot_train,qu=0.95)
+
+q_base_99_wind<-qgam(wind~
+                       s(lat,lon,k=20)+
+                       s(time_cont,k=5)+month+qu_99_wind,data=tot_train,qu=0.99)
+
+q_cold_99_wind<-qgam(wind~
+                       s(lat,lon,k=20)+
+                       s(time_cont,k=5)+
+                       s(US_temp_lag2,k=5)+month+qu_99_wind,data=tot_train,qu=0.99)
+
+q_jet_99_wind<-qgam(wind~
+                      s(lat,lon,k=20)+
+                      s(time_cont,k=5)+s(US_temp_lag2,k=5)+
+                      s(jet_strength_lag1)+s(lat_jet_lag1)+
+                      s(jet_proximity_lag1)+
+                      s(NAO_lag1,k=5)+month+qu_99_wind,data=tot_train,qu=0.99)
+
+#Prec
 
 
-#############LOAD MODELS #############
+q_base_95_prec<-qgam(prec~
+                       s(lat,lon,k=20)+
+                       s(time_cont,k=5)+month+qu_95_prec,data=tot_train,qu=0.95)
 
-setwd("new_results_3")
 
-q_base_wind_99<-readRDS("q_base_99_wind.Rda")
-q_base_wind_95<-readRDS("q_base_95_wind.Rda")
-q_cold_wind_99<-readRDS("q_cold_99_wind.Rda")
-q_cold_wind_95<-readRDS("q_cold_95_wind.Rda")
-q_jet_wind_99<-readRDS("q_jet_99_wind.Rda")
-q_jet_wind_95<-readRDS("q_jet_95_wind.Rda")
+q_cold_95_prec<-qgam(prec~
+                       s(lat,lon,k=20)+
+                       s(time_cont,k=5)+
+                       s(US_temp_lag2,k=5)+month+qu_95_prec,data=tot_train,qu=0.95)
 
-q_base_prec_99<-readRDS("q_base_99_prec.Rda")
-q_base_prec_95<-readRDS("q_base_95_prec.Rda")
-q_cold_prec_99<-readRDS("q_cold_99_prec.Rda")
-q_cold_prec_95<-readRDS("q_cold_95_prec.Rda")
-q_jet_prec_99<-readRDS("q_jet_99_prec.Rda")
-q_jet_prec_95<-readRDS("q_jet_95_prec.Rda")
+
+q_jet_95_prec<-qgam(prec~
+                      s(lat,lon,k=20)+
+                      s(time_cont,k=5)+s(US_temp_lag2,k=5)+
+                      s(jet_strength_lag1)+s(lat_jet_lag1)+
+                      s(jet_proximity_lag1)+
+                      s(NAO_lag1,k=5)+month+qu_95_prec,data=tot_train,qu=0.95)
+
+
+q_base_99_prec<-qgam(prec~
+                       s(lat,lon,k=20)+
+                       s(time_cont,k=5)+month+qu_99_prec,data=tot_train,qu=0.99)
+
+
+q_cold_99_prec<-qgam(prec~
+                       s(lat,lon,k=20)+
+                       s(time_cont,k=5)+
+                       s(US_temp_lag2,k=5)+month+qu_99_prec,data=tot_train,qu=0.99)
+
+
+q_jet_99_prec<-qgam(prec~
+                      s(lat,lon,k=20)+
+                      s(time_cont,k=5)+s(US_temp_lag2,k=5)+
+                      s(jet_strength_lag1)+s(lat_jet_lag1)+
+                      s(jet_proximity_lag1)+
+                      s(NAO_lag1,k=5)+month+qu_99_prec,data=tot_train,qu=0.99)
 
 
 #PREDICTED VALUES QGAMS
@@ -205,8 +206,10 @@ pred_q_cold_prec_95<-predict(q_cold_prec_95,tot_test)
 pred_q_jet_prec_99<-predict(q_jet_prec_99,tot_test)
 pred_q_jet_prec_95<-predict(q_jet_prec_95,tot_test)
 
-setwd("..")
-############## Wind ##########
+
+######################Bias analysis(Fiugre 4-5) and comparison to seasonal climatology (Figure 6-7) ##############
+
+#Wind
 
 p_q_base_wind_99<-Quant_eval(pred_q_base_wind_99,wind,0.99,tot_test)
 p_q_base_99<-overpred(p_q_base_wind_99,0.99,direc=-1,low_lim=0,up_lim=0.02,midpo=0.01)
@@ -238,13 +241,6 @@ annotate_figure(
   ggarrange(a,b,nrow=2),
   text_grob("QGAM bias: Daily 10m Wind Speed",face="bold", size=15)
 )
-
-ggsave(file = "Qgam wind bias_app.pdf",
-       device="pdf",
-       path="Pics",
-    width = 12, # The width of the plot in inches
-    height = 7.5,
-    dpi=800) # The height of the plot in inches
 
 R2_q_base_wind_99<-Pseudo_R2_point(pred_q_base_wind_99,wind,0.99,tot_train,tot_test)
 p_q_base_99_R2<-Plot_R2(R2_q_base_wind_99,0.99,up_lim = 0.21,low_lim=-0.21)
@@ -283,36 +279,7 @@ annotate_figure(
   text_grob("QGAM performance: Daily 10m Wind Speed",face="bold", size=15)
 )
 
-ggsave(file = "Qgam wind R2_app.pdf",
-       device="pdf",
-       path="Pics",
-       width = 12, # The width of the plot in inches
-       height = 7.5,
-       dpi=800) # The height of the plot in inches
-
-
-
-'summary(q_base_wind_99)
-acf(q_base_wind_99$residuals)
-pacf(q_base_wind_99$residuals)
-summary(p_q_base_wind_95)
-acf(q_base_wind_95$residuals)
-pacf(q_base_wind_95$residuals)
-summary(q_cold_wind_99)
-acf(q_cold_wind_99$residuals)
-pacf(q_cold_wind_99$residuals)
-acf(q_cold_wind_95$residuals)
-pacf(q_cold_wind_95$residuals)
-summary(p_q_jet_wind_99)
-acf(q_jet_wind_99$residuals)
-pacf(q_jet_wind_99$residuals)
-summary(p_q_jet_wind_95)
-acf(q_jet_wind_95$residuals)
-pacf(q_jet_wind_95$residuals)'
-
-
 #overview
-Pseudo_R2_tot(pred_q_base_wind_95,wind,0.95,tot_train,tot_test)
 
 Pseudo_R2_jet_99_QGAM_wind<-Pseudo_R2_tot(pred_q_jet_wind_99,wind,0.99,tot_train,tot_test)
 Pseudo_R2_jet_95_QGAM_wind<-Pseudo_R2_tot(pred_q_jet_wind_95,wind,0.95,tot_train,tot_test)
@@ -320,14 +287,8 @@ Pseudo_R2_jet_95_QGAM_wind<-Pseudo_R2_tot(pred_q_jet_wind_95,wind,0.95,tot_train
 Pseudo_R2_jet_99_QGAM_wind
 Pseudo_R2_jet_95_QGAM_wind
 
-#draw(q_base_wind_95,rug=FALSE)
-'draw(q_jet_wind_95,rug=FALSE)
-summary(l_base_wind_95)
-k.check(q_jet_wind_99)
-check(q_jet_wind_99$calibr)
-cqcheck(q_jet_wind_99,v=c("time_cont"))'
 
-###########PREC#################
+#Prec
 
 p_q_base_prec_99<-Quant_eval(pred_q_base_prec_99,prec,0.99,tot_test)
 p_q_base_99<-overpred(p_q_base_prec_99,0.99,low_lim=0,up_lim=0.02,midpo=0.01)
@@ -358,14 +319,6 @@ annotate_figure(
   ggarrange(a,b,nrow=2),
   text_grob("QGAM bias: Daily Precipitation",face="bold", size=15)
 )
-
-ggsave(file = "Qgam prec bias_app.pdf",
-       device="pdf",
-       path="Pics",
-       width = 12, # The width of the plot in inches
-       height = 7.5,
-       dpi=800) # The height of the plot in inches
-
 
 R2_q_base_prec_99<-Pseudo_R2_point(pred_q_base_prec_99,prec,0.99,tot_train,tot_test)
 p_q_base_99_R2<-Plot_R2(R2_q_base_prec_99,0.99,up_lim = 0.21,low_lim=-0.21,opt="G")
@@ -404,31 +357,6 @@ annotate_figure(
   text_grob("QGAM performance: Daily Precipitation",face="bold", size=15)
 )
 
-ggsave(file = "Qgam prec R2_app.pdf",
-       device="pdf",
-       path="Pics",
-       width = 12, # The width of the plot in inches
-       height = 7.5,
-       dpi=800) # The height of the plot in inches
-
-'summary(q_base_prec_99)
-acf(q_base_prec_99$residuals)
-pacf(q_base_prec_99$residuals)
-summary(p_q_base_prec_95)
-acf(q_base_prec_95$residuals)
-pacf(q_base_prec_95$residuals)
-summary(q_cold_prec_99)
-acf(q_cold_prec_99$residuals)
-pacf(q_cold_prec_99$residuals)
-acf(q_cold_prec_95$residuals)
-pacf(q_cold_prec_95$residuals)
-summary(p_q_jet_prec_99)
-acf(q_jet_prec_99$residuals)
-pacf(q_jet_prec_99$residuals)
-summary(p_q_jet_prec_95)
-acf(q_jet_prec_95$residuals)
-pacf(q_jet_prec_95$residuals)'
-
 Pseudo_R2_jet_99_QGAM_prec<-Pseudo_R2_tot(pred_q_jet_prec_99,prec,0.99,tot_train,tot_test)
 Pseudo_R2_jet_95_QGAM_prec<-Pseudo_R2_tot(pred_q_jet_prec_95,prec,0.95,tot_train,tot_test)
 
@@ -436,19 +364,19 @@ Pseudo_R2_jet_99_QGAM_prec
 Pseudo_R2_jet_95_QGAM_prec
 
 
-############PARTIAL EFFECTS##############
+############Figure 3 - partial effects##############
 
 a<-annotate_figure(ggarrange(
   annotate_figure(
     ggarrange(
-      plot_smooth(q_cold_wind_95)+labs(y="Partial effect",x=""),
-      plot_smooth(q_cold_prec_95,col="dark blue")+labs(y="",x=""),
+      plot_smooth(q_cold_wind_95)+labs(y="Partial effect",x="")+xlim(-2.5,2.5)+ylim(-1,1),
+      plot_smooth(q_cold_prec_95,col="dark blue")+labs(y="",x="")+xlim(-2.5,2.5)+ylim(-1,1),
       labels=c("a","b")),text_grob("Cold spell model",size=12,face="bold")),
   
   annotate_figure(
     ggarrange(
-      plot_smooth(q_jet_wind_95)+labs(y="",x=""),
-      plot_smooth(q_jet_prec_95,col="dark blue")+labs(y="",x=""),
+      plot_smooth(q_jet_wind_95)+labs(y="",x="")+xlim(-2.5,2.5)+ylim(-1,1),
+      plot_smooth(q_jet_prec_95,col="dark blue")+labs(y="",x="")+xlim(-2.5,2.5)+ylim(-1,1),
       labels = c("e","f")
     ),text_grob("Cold spell and jet stream model",size=12,face="bold")
   ),nrow=1),text_grob("95th percentile",size=12,face="bold")
@@ -457,14 +385,14 @@ a<-annotate_figure(ggarrange(
 
 b<-annotate_figure(ggarrange(
   ggarrange(
-    plot_smooth(q_cold_wind_99)+labs(y="Partial effect",x="lag -2 std.temp.anomaly (K) at 2m height"),
-    plot_smooth(q_cold_prec_99,col="dark blue")+labs(y="",x="lag -2 std.temp. anomaly (K) at 2m height"),
+    plot_smooth(q_cold_wind_99)+xlim(-2.5,2.5)+ylim(-1,1)+labs(y="Partial effect",x="lag -2 2m temp. an. (K), std. variable"),
+    plot_smooth(q_cold_prec_99,col="dark blue")+xlim(-2.5,2.5)+ylim(-1,1)+labs(y="",x="lag -2 2m temp. an. (K), std. variable"),
     labels = c("c","d")
   ),
   ggarrange(
-    plot_smooth(q_jet_wind_99)+labs(y="",x="lag -2 std.temp. anomaly (K) at 2m height"),
-    plot_smooth(q_jet_prec_99,col="dark blue")+labs(y="",x="lag -2 std.temp. anomaly (K) at 2m height"),
-    labels = c("G","H")
+    plot_smooth(q_jet_wind_99)+xlim(-2.5,2.5)+ylim(-1,1)+labs(y="",x="lag -2 2m temp. an. (K), std. variable"),
+    plot_smooth(q_jet_prec_99,col="dark blue")+xlim(-2.5,2.5)+ylim(-1,1)+labs(y="",x="lag -2 2m temp. an. (K), std. variable"),
+    labels = c("g","h")
   ),nrow = 1),text_grob("99th percentile",size=12,face="bold")
 )
 
@@ -472,18 +400,17 @@ annotate_figure(
   ggarrange(a,b,nrow=2),text_grob("Partial effect of temperature at 2m height in North America on near-surface weather in Western Europe",size=15,face="bold"))
 
 
-
-############Linear Quantile Regression########
+############QREG########
 
 #wind
 
-l_base_wind_95<-rq(wind~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(qu_95_wind)+as.numeric(wind_lag1),tau=0.95,tot_train)
-l_cold_wind_95<-rq(wind~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(US_temp_lag2)+as.numeric(qu_95_wind)+as.numeric(wind_lag1),tau=0.95,tot_train)
-l_jet_wind_95<-rq(wind~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(jet_proximity_lag1)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(NAO_lag1)+as.numeric(qu_95_wind)+as.numeric(wind_lag1),tau=0.95,tot_train)
+l_base_wind_95<-rq(wind~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(qu_95_wind),tau=0.95,tot_train)
+l_cold_wind_95<-rq(wind~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(US_temp_lag2)+as.numeric(qu_95_wind),tau=0.95,tot_train)
+l_jet_wind_95<-rq(wind~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(jet_proximity_lag1)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(NAO_lag1)+as.numeric(qu_95_wind),tau=0.95,tot_train)
 
-l_base_wind_99<-rq(wind~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(qu_99_wind)+as.numeric(wind_lag1),tau=0.99,tot_train)
-l_cold_wind_99<-rq(wind~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(US_temp_lag2)+as.numeric(qu_99_wind)+as.numeric(wind_lag1),tau=0.99,tot_train)
-l_jet_wind_99<-rq(wind~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(jet_proximity_lag1)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(NAO_lag1)+as.numeric(qu_99_wind)+as.numeric(wind_lag1),tau=0.99,tot_train)
+l_base_wind_99<-rq(wind~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(qu_99_wind),tau=0.99,tot_train)
+l_cold_wind_99<-rq(wind~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(US_temp_lag2)+as.numeric(qu_99_wind),tau=0.99,tot_train)
+l_jet_wind_99<-rq(wind~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(jet_proximity_lag1)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(NAO_lag1)+as.numeric(qu_99_wind),tau=0.99,tot_train)
 
 
 pred_l_base_wind_99<-predict(l_base_wind_99,tot_test)
@@ -562,13 +489,13 @@ annotate_figure(
 )
 
 
-'summary(l_base_wind_95)
+summary(l_base_wind_95)
 summary(l_cold_wind_95)
 summary(l_jet_wind_95)
 
 summary(l_base_wind_99)
 summary(l_cold_wind_99)
-summary(l_jet_wind_99)'
+summary(l_jet_wind_99)
 
 Pseudo_R2_tot(pred_l_jet_wind_95,wind,0.95,tot_train,tot_test)
 Pseudo_R2_tot(pred_l_jet_wind_99,wind,0.99,tot_train,tot_test)
@@ -577,13 +504,13 @@ Pseudo_R2_tot(pred_l_jet_wind_99,wind,0.99,tot_train,tot_test)
 
 #prec
 
-l_base_prec_95<-rq(prec~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(qu_95_prec)+as.numeric(prec_lag1),tau=0.95,tot_train)
-l_cold_prec_95<-rq(prec~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(US_temp_lag2)+as.numeric(qu_95_prec)+as.numeric(prec_lag1),tau=0.95,tot_train)
-l_jet_prec_95<-rq(prec~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(jet_proximity_lag1)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(NAO_lag1)+as.numeric(qu_95_prec)+as.numeric(prec_lag1),tau=0.95,tot_train)
+l_base_prec_95<-rq(prec~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(qu_95_prec),tau=0.95,tot_train)
+l_cold_prec_95<-rq(prec~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(US_temp_lag2)+as.numeric(qu_95_prec),tau=0.95,tot_train)
+l_jet_prec_95<-rq(prec~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(jet_proximity_lag1)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(NAO_lag1)+as.numeric(qu_95_prec),tau=0.95,tot_train)
 
-l_base_prec_99<-rq(prec~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(qu_99_prec)+as.numeric(prec_lag1),tau=0.99,tot_train)
-l_cold_prec_99<-rq(prec~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(US_temp_lag2)+as.numeric(qu_99_prec)+as.numeric(prec_lag1),tau=0.99,tot_train)
-l_jet_prec_99<-rq(prec~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(jet_proximity_lag1)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(NAO_lag1)+as.numeric(qu_99_prec)+as.numeric(prec_lag1),tau=0.99,tot_train)
+l_base_prec_99<-rq(prec~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(qu_99_prec),tau=0.99,tot_train)
+l_cold_prec_99<-rq(prec~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(US_temp_lag2)+as.numeric(qu_99_prec),tau=0.99,tot_train)
+l_jet_prec_99<-rq(prec~as.numeric(lat)*as.numeric(lon)+as.numeric(year)+month+as.numeric(jet_proximity_lag1)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(NAO_lag1)+as.numeric(qu_99_prec),tau=0.99,tot_train)
 
 pred_l_base_prec_99<-predict(l_base_prec_99,tot_test)
 pred_l_base_prec_95<-predict(l_base_prec_95,tot_test)
@@ -662,13 +589,13 @@ annotate_figure(
 
 
 
-'summary(l_base_prec_95)
+summary(l_base_prec_95)
 summary(l_cold_prec_95)
 summary(l_jet_prec_95)
 
 summary(l_base_prec_99)
 summary(l_cold_prec_99)
-summary(l_jet_prec_99)'
+summary(l_jet_prec_99)
 
 
 Pseudo_R2_tot(pred_l_base_prec_95,prec,0.95,tot_train,tot_test)
@@ -676,14 +603,13 @@ Pseudo_R2_tot(pred_l_cold_prec_95,prec,0.95,tot_train,tot_test)
 Pseudo_R2_tot(pred_l_jet_prec_95,prec,0.95,tot_train,tot_test)
 
 
-#############MULTIPLOTS###########
+#############Multiplots - Plot 8-11###########
 
 
 #WIND
 
 R2_l_base_multi_99<-Pseudo_R2_point_multi(pred_q_base_wind_99,pred_l_base_wind_99,wind,0.99,tot_train,tot_test)
 p_l_base_99_R2<-Plot_R2(R2_l_base_multi_99,0.99,up_lim = 0.11, low_lim = -0.11)
-
 
 R2_l_cold_multi_99<-Pseudo_R2_point_multi(pred_q_cold_wind_99,pred_l_cold_wind_99,wind,0.99,tot_train,tot_test)
 p_l_cold_99_R2<-Plot_R2(R2_l_cold_multi_99,0.99,up_lim = 0.11, low_lim = -0.11)
@@ -715,7 +641,6 @@ a<-annotate_figure(ggarrange(p_l_base_95_R2,
                              p_l_jet_95_R2,
                              common.legend = TRUE,legend="right",nrow=1,labels=c("a","b","c")),
                    text_grob("95th percentile",face="bold", size=12))
-
 b<-annotate_figure(ggarrange(p_l_base_99_R2,
                              p_l_cold_99_R2,
                              p_l_jet_99_R2,
@@ -727,24 +652,13 @@ annotate_figure(
   text_grob("QGAM vs QREG performance: Daily 10m Wind Speed",face="bold", size=15)
 )
 
-ggsave(file = "Qgam Qreg wind R2_app.pdf",
-       device="pdf",
-       path="Pics",
-       width = 12, # The width of the plot in inches
-       height = 7.5,
-       dpi=800) # The height of the plot in inches
-
-
 Pseudo_R2_tot_multi(pred_q_base_wind_95,pred_l_base_wind_95,wind,0.95,tot_train,tot_test)
 Pseudo_R2_tot_multi(pred_q_cold_wind_95,pred_l_cold_wind_95,wind,0.95,tot_train,tot_test)
 Pseudo_R2_jet_95_QGAM_QREG_wind<-Pseudo_R2_tot_multi(pred_q_jet_wind_95,pred_l_jet_wind_95,wind,0.95,tot_train,tot_test)
 Pseudo_R2_jet_95_QGAM_QREG_wind
 
 
-
-
 #PRECIPITATION
-
 
 R2_l_base_multi_99<-Pseudo_R2_point_multi(pred_q_base_prec_99,pred_l_base_prec_99,prec,0.99,tot_train,tot_test)
 p_l_base_99_R2<-Plot_R2(R2_l_base_multi_99,0.99,up_lim = 0.11, low_lim = -0.11, opt="G")
@@ -756,9 +670,6 @@ p_l_cold_99_R2<-Plot_R2(R2_l_cold_multi_99,0.99,up_lim = 0.11, low_lim = -0.11,o
 
 R2_l_jet_multi_99<-Pseudo_R2_point_multi(pred_q_jet_prec_99,pred_l_jet_prec_99,prec,0.99,tot_train,tot_test)
 p_l_jet_99_R2<-Plot_R2(R2_l_jet_multi_99,0.99,up_lim = 0.11, low_lim = -0.11,opt="G")
-
-
-
 
 Pseudo_R2_tot_multi(pred_q_base_prec_99,pred_l_base_prec_99,prec,0.99,tot_train,tot_test)
 Pseudo_R2_tot_multi(pred_q_cold_prec_99,pred_l_cold_prec_99,prec,0.99,tot_train,tot_test)
@@ -799,30 +710,23 @@ annotate_figure(
   text_grob("QGAM vs QREG performance: Daily Precipitation",face="bold", size=15)
 )
 
-ggsave(file = "Qgam Qreg prec R2_app.pdf",
-       device="pdf",
-       path="Pics",
-       width = 12, # The width of the plot in inches
-       height = 7.5,
-       dpi=800) # The height of the plot in inches
-
 
 ################ POT ################
 
-##### WIND #######
+#Wind
 
 da<-POT_declust_out(tot_train,wind,0.8,over=TRUE)
 da$dat$excesses<-da$dat$key_var-da$threshold
 
-POT_base_wind_99<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(qu_99_wind)+as.numeric(wind_lag1),~1),family="gpd",da$dat)
-R2_POT_base_wind_99<-Pseudo_R2_point_EVT(POT_base_wind_99,wind,0.99,tot_train,tot_test)
-p_POT_base_99_R2<-Plot_R2(R2_POT_base_wind_99,0.99,up_lim = 0.11, low_lim = -0.11)
+POT_base_wind_99<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(qu_99_wind),~1),family="gpd",da$dat)
+R2_POT_base_wind_99<-Pseudo_R2_point_EVT(POT_base_wind_99,wind,0.99,train=tot_train,test=tot_test)
+p_POT_base_99_R2<-Plot_R2(R2_POT_base_wind_99,0.99,up_lim = 0.21, low_lim = -0.21)
 Pseudo_R2_tot_multi_EVT(pred_q_base_wind_99,POT_base_wind_99,wind,0.99,tot_train,tot_test)
 
 R2_multi_POT_base_R2_99<-Pseudo_R2_point_multi_EVT(pred_q_base_wind_99,POT_base_wind_99,wind,0.99,tot_train,tot_test)
 p_q_base_99_R2<-Plot_R2(R2_multi_POT_base_R2_99,0.99,up_lim = 0.11, low_lim = -0.11)
 
-POT_cold_wind_99<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(qu_99_wind)+as.numeric(wind_lag1),~1),family="gpd",da$dat)
+POT_cold_wind_99<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(qu_99_wind),~1),family="gpd",da$dat)
 R2_POT_cold_wind_99<-Pseudo_R2_point_EVT(POT_cold_wind_99,wind,0.99,tot_train,tot_test)
 p_POT_cold_99_R2<-Plot_R2(R2_POT_cold_wind_99,0.99,up_lim = 0.62)
 Pseudo_R2_tot_multi_EVT(pred_q_cold_wind_99,POT_cold_wind_99,wind,0.99,tot_train,tot_test)
@@ -833,28 +737,28 @@ p_q_cold_99_R2<-Plot_R2(R2_multi_POT_cold_R2_99,0.99,up_lim = 0.11, low_lim = -0
 da$dat<-da$dat%>%
   drop_na(NAO_lag1)
 
-POT_jet_wind_99<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(lat_jet_lag1)+as.numeric(NAO_lag1)+as.numeric(jet_proximity_lag1)+as.numeric(qu_99_wind)+as.numeric(wind_lag1),~1),family="gpd",da$dat)
+POT_jet_wind_99<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(lat_jet_lag1)+as.numeric(NAO_lag1)+as.numeric(jet_proximity_lag1)+as.numeric(qu_99_wind),~1),family="gpd",da$dat)
 R2_POT_jet_wind_99<-Pseudo_R2_point_EVT(POT_jet_wind_99,wind,0.99,tot_train,tot_test)
 p_POT_jet_99_R2<-Plot_R2(R2_POT_jet_wind_99,0.99,up_lim = 0.62)
 Pseudo_R2_jet_99_QGAM_POT_wind<-Pseudo_R2_tot_multi_EVT(pred_q_jet_wind_99,POT_jet_wind_99,wind,0.99,tot_train,tot_test)
 
-Pseudo_R2_jet_99_QGAM_POT_wind
-
 R2_multi_POT_jet_R2_99<-Pseudo_R2_point_multi_EVT(pred_q_jet_wind_99,POT_jet_wind_99,wind,0.99,tot_train,tot_test)
 p_q_jet_99_R2<-Plot_R2(R2_multi_POT_jet_R2_99,0.99,up_lim = 0.11, low_lim = -0.11)
+
+Pseudo_R2_jet_99_QGAM_POT_wind
 
 da<-POT_declust_out(tot_train,wind,0.8,over=TRUE)
 da$dat$excesses<-da$dat$key_var-da$threshold
 
-POT_base_wind_95<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(qu_95_wind)+as.numeric(wind_lag1),~1),family="gpd",da$dat)
+POT_base_wind_95<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(qu_95_wind),~1),family="gpd",da$dat)
 R2_POT_base_wind_95<-Pseudo_R2_point_EVT(POT_base_wind_95,wind,0.95,tot_train,tot_test)
-p_POT_base_95_R2<-Plot_R2(R2_POT_base_wind_95,0.95,up_lim = 0.11, low_lim = -0.11)
+p_POT_base_95_R2<-Plot_R2(R2_POT_base_wind_95,0.95,up_lim = 0.21, low_lim = -0.21)
 Pseudo_R2_tot_multi_EVT(pred_q_base_wind_95,POT_base_wind_95,wind,0.95,tot_train,tot_test)
 
 R2_multi_POT_base_R2_95<-Pseudo_R2_point_multi_EVT(pred_q_base_wind_95,POT_base_wind_95,wind,0.95,tot_train,tot_test)
 p_q_base_95_R2<-Plot_R2(R2_multi_POT_base_R2_95,0.95,up_lim = 0.11, low_lim = -0.11)
 
-POT_cold_wind_95<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(qu_95_wind)+as.numeric(wind_lag1),~1),family="gpd",da$dat)
+POT_cold_wind_95<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(qu_95_wind),~1),family="gpd",da$dat)
 R2_POT_cold_wind_95<-Pseudo_R2_point_EVT(POT_cold_wind_95,wind,0.95,tot_train,tot_test)
 p_POT_cold_95_R2<-Plot_R2(R2_POT_cold_wind_95,0.95,up_lim = 0.62)
 Pseudo_R2_tot_multi_EVT(pred_q_cold_wind_95,POT_cold_wind_95,wind,0.95,tot_train,tot_test)
@@ -865,11 +769,10 @@ p_q_cold_95_R2<-Plot_R2(R2_multi_POT_cold_R2_95,0.95,up_lim = 0.11, low_lim = -0
 da$dat<-da$dat%>%
   drop_na(NAO_lag1)
 
-POT_jet_wind_95<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(lat_jet_lag1)+as.numeric(NAO_lag1)+as.numeric(jet_proximity_lag1)+as.numeric(qu_95_wind)+as.numeric(wind_lag1),~1),family="gpd",da$dat)
+POT_jet_wind_95<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(lat_jet_lag1)+as.numeric(NAO_lag1)+as.numeric(jet_proximity_lag1)+as.numeric(qu_95_wind),~1),family="gpd",da$dat)
 R2_POT_jet_wind_95<-Pseudo_R2_point_EVT(POT_jet_wind_95,wind,0.95,tot_train,tot_test)
 p_POT_jet_95_R2<-Plot_R2(R2_POT_jet_wind_95,0.95,up_lim = 0.62)
 Pseudo_R2_jet_95_QGAM_POT_wind<-Pseudo_R2_tot_multi_EVT(pred_q_jet_wind_95,POT_jet_wind_95,wind,0.95,tot_train,tot_test)
-
 Pseudo_R2_jet_95_QGAM_POT_wind
 
 R2_multi_POT_jet_R2_95<-Pseudo_R2_point_multi_EVT(pred_q_jet_wind_95,POT_jet_wind_95,wind,0.95,tot_train,tot_test)
@@ -892,30 +795,24 @@ annotate_figure(
   text_grob("QGAM vs POT performance: Daily 10m Wind Speed",face="bold", size=15)
 )
 
-ggsave(file = "Qgam Pot wind R2_app.pdf",
-       device="pdf",
-       path="Pics",
-       width = 12, # The width of the plot in inches
-       height = 7.5,
-       dpi=800) # The height of the plot in inches
+#Prec
 
-######PREC #######
-
-da<-POT_declust_out(tot_train,prec,0.8,over=TRUE, declust = 1)
+da<-POT_declust_out(tot_train,prec,0.8,over=TRUE,declust=TRUE)
 da$dat$excesses<-da$dat$key_var-da$threshold
 
-POT_base_prec_99<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(qu_99_prec)+as.numeric(prec_lag1),~1),family="gpd",da$dat)
+POT_base_prec_99<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(qu_99_prec),~1),family="gpd",da$dat)
 R2_POT_base_prec_99<-Pseudo_R2_point_EVT(POT_base_prec_99,prec,0.99,tot_train,tot_test)
-p_POT_base_99_R2<-Plot_R2(R2_POT_base_prec_99,0.99,up_lim = 0.11, low_lim = -0.11)
+p_POT_base_99_R2<-Plot_R2(R2_POT_base_prec_99,0.99,up_lim = 0.21, low_lim = -0.21)
 Pseudo_R2_tot_multi_EVT(pred_q_base_prec_99,POT_base_prec_99,prec,0.99,tot_train,tot_test)
 
 R2_multi_POT_base_R2_99<-Pseudo_R2_point_multi_EVT(pred_q_base_prec_99,POT_base_prec_99,prec,0.99,tot_train,tot_test)
 p_q_base_99_R2<-Plot_R2(R2_multi_POT_base_R2_99,0.99,up_lim = 0.11, low_lim = -0.11,opt="G")
 
-POT_cold_prec_99<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(qu_99_prec)+as.numeric(prec_lag1),~1),family="gpd",da$dat)
+POT_cold_prec_99<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(qu_99_prec),~1),family="gpd",da$dat)
 R2_POT_cold_prec_99<-Pseudo_R2_point_EVT(POT_cold_prec_99,prec,0.99,tot_train,tot_test)
 p_POT_cold_99_R2<-Plot_R2(R2_POT_cold_prec_99,0.99,up_lim = 0.62)
 Pseudo_R2_tot_multi_EVT(pred_q_cold_prec_99,POT_cold_prec_99,prec,0.99,tot_train,tot_test)
+
 
 R2_multi_POT_cold_R2_99<-Pseudo_R2_point_multi_EVT(pred_q_cold_prec_99,POT_cold_prec_99,prec,0.99,tot_train,tot_test)
 p_q_cold_99_R2<-Plot_R2(R2_multi_POT_cold_R2_99,0.99,up_lim = 0.11, low_lim = -0.11,opt="G")
@@ -924,29 +821,28 @@ Pseudo_R2_tot_multi_EVT(pred_q_cold_prec_99,POT_cold_prec_99,prec,0.99,tot_train
 da$dat<-da$dat%>%
   drop_na(NAO_lag1)
 
-POT_jet_prec_99<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(lat_jet_lag1)+as.numeric(NAO_lag1)+as.numeric(jet_proximity_lag1)+as.numeric(qu_99_prec)+as.numeric(prec_lag1),~1),family="gpd",da$dat)
+POT_jet_prec_99<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(lat_jet_lag1)+as.numeric(NAO_lag1)+as.numeric(jet_proximity_lag1)+as.numeric(qu_99_prec),~1),family="gpd",da$dat)
 R2_POT_jet_prec_99<-Pseudo_R2_point_EVT(POT_jet_prec_99,prec,0.99,tot_train,tot_test)
 p_POT_jet_99_R2<-Plot_R2(R2_POT_jet_prec_99,0.99,up_lim = 0.62)
 Pseudo_R2_jet_99_QGAM_POT_prec<-Pseudo_R2_tot_multi_EVT(pred_q_jet_prec_99,POT_jet_prec_99,prec,0.99,tot_train,tot_test)
 
-Pseudo_R2_jet_99_QGAM_POT_prec
-
 R2_multi_POT_jet_R2_99<-Pseudo_R2_point_multi_EVT(pred_q_jet_prec_99,POT_jet_prec_99,prec,0.99,tot_train,tot_test)
 p_q_jet_99_R2<-Plot_R2(R2_multi_POT_jet_R2_99,0.99,up_lim = 0.11, low_lim = -0.11,opt="G")
+Pseudo_R2_jet_99_QGAM_POT_prec
 
-
-da<-POT_declust_out(tot_train,prec,0.8,over=TRUE, declust=1)
+da<-POT_declust_out(tot_train,prec,0.8,over=TRUE,declust=TRUE)
 da$dat$excesses<-da$dat$key_var-da$threshold
 
-POT_base_prec_95<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(qu_95_prec)+as.numeric(prec_lag1),~1),family="gpd",da$dat)
+POT_base_prec_95<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(qu_95_prec),~1),family="gpd",da$dat)
 R2_POT_base_prec_95<-Pseudo_R2_point_EVT(POT_base_prec_95,prec,0.95,tot_train,tot_test)
-p_POT_base_95_R2<-Plot_R2(R2_POT_base_prec_95,0.95,up_lim = 0.11, low_lim = -0.11)
+p_POT_base_95_R2<-Plot_R2(R2_POT_base_prec_95,0.95,up_lim = 0.21, low_lim = -0.21)
 Pseudo_R2_tot_multi_EVT(pred_q_base_prec_95,POT_base_prec_95,prec,0.95,tot_train,tot_test)
 
 R2_multi_POT_base_R2_95<-Pseudo_R2_point_multi_EVT(pred_q_base_prec_95,POT_base_prec_95,prec,0.95,tot_train,tot_test)
 p_q_base_95_R2<-Plot_R2(R2_multi_POT_base_R2_95,0.95,up_lim = 0.11, low_lim = -0.11,opt="G")
 
-POT_cold_prec_95<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(qu_95_prec)+as.numeric(prec_lag1),~1),family="gpd",da$dat)
+
+POT_cold_prec_95<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(qu_95_prec),~1),family="gpd",da$dat)
 R2_POT_cold_prec_95<-Pseudo_R2_point_EVT(POT_cold_prec_95,prec,0.95,tot_train,tot_test)
 p_POT_cold_95_R2<-Plot_R2(R2_POT_cold_prec_95,0.95,up_lim = 0.62)
 Pseudo_R2_tot_multi_EVT(pred_q_cold_prec_95,POT_cold_prec_95,prec,0.95,tot_train,tot_test)
@@ -957,15 +853,14 @@ p_q_cold_95_R2<-Plot_R2(R2_multi_POT_cold_R2_95,0.95,up_lim = 0.11, low_lim = -0
 da$dat<-da$dat%>%
   drop_na(NAO_lag1)
 
-POT_jet_prec_95<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(lat_jet_lag1)+as.numeric(NAO_lag1)+as.numeric(jet_proximity_lag1)+as.numeric(qu_95_prec)+as.numeric(prec_lag1),~1),family="gpd",da$dat)
+POT_jet_prec_95<-evgam(list(excesses~as.numeric(lat)*as.numeric(lon)+month+as.numeric(year)+as.numeric(US_temp_lag2)+as.numeric(jet_strength_lag1)+as.numeric(lat_jet_lag1)+as.numeric(NAO_lag1)+as.numeric(jet_proximity_lag1)+as.numeric(qu_95_prec),~1),family="gpd",da$dat)
 R2_POT_jet_prec_95<-Pseudo_R2_point_EVT(POT_jet_prec_95,prec,0.95,tot_train,tot_test)
 p_POT_jet_95_R2<-Plot_R2(R2_POT_jet_prec_95,0.95,up_lim = 0.62)
 Pseudo_R2_jet_95_QGAM_POT_prec<-Pseudo_R2_tot_multi_EVT(pred_q_jet_prec_95,POT_jet_prec_95,prec,0.95,tot_train,tot_test)
 
-Pseudo_R2_jet_95_QGAM_POT_prec
-
 R2_multi_POT_jet_R2_95<-Pseudo_R2_point_multi_EVT(pred_q_jet_prec_95,POT_jet_prec_95,prec,0.95,tot_train,tot_test)
 p_q_jet_95_R2<-Plot_R2(R2_multi_POT_jet_R2_95,0.95,up_lim = 0.11, low_lim = -0.11,opt="G")
+Pseudo_R2_jet_95_QGAM_POT_prec
 
 a<-annotate_figure(ggarrange(p_q_base_95_R2,
                              p_q_cold_95_R2,
@@ -985,21 +880,13 @@ annotate_figure(
 )
 
 
-ggsave(file = "Qgam Pot prec R2_app.pdf",
-       device="pdf",
-       path="Pics",
-       width = 12, # The width of the plot in inches
-       height = 7.5,
-       dpi=800) # The height of the plot in inches
-
-
-##########SUMMARY_TABLE###########
+##########Summary table###########
 
 R2_wind_tab<-matrix(c(Pseudo_R2_jet_95_QGAM_wind,Pseudo_R2_jet_99_QGAM_wind,Pseudo_R2_jet_95_QGAM_POT_wind,Pseudo_R2_jet_99_QGAM_POT_wind,Pseudo_R2_jet_95_QGAM_QREG_wind,Pseudo_R2_jet_99_QGAM_QREG_wind),nrow=3,ncol=2,byrow=TRUE)%>%
   as.data.frame()
 
 colnames(R2_wind_tab)<-c("95th percentile","99th percentile")
-rownames(R2_wind_tab)<-c("Quantile of the climatology","POT","QREG")
+rownames(R2_wind_tab)<-c("Quantile of the seasonal climatology","POT","QREG")
 
 R2_wind_tab%>%
   xtable(digits=4)
@@ -1013,19 +900,15 @@ R2_prec_tab<-matrix(c(Pseudo_R2_jet_95_QGAM_prec,Pseudo_R2_jet_99_QGAM_prec,Pseu
   as.data.frame()
 
 colnames(R2_prec_tab)<-c("95th percentile","99th percentile")
-rownames(R2_prec_tab)<-c("Quantile of the climatology","POT","QREG")
+rownames(R2_prec_tab)<-c("Quantile of the seasonal climatology","POT","QREG")
 
 R2_prec_tab%>%
   xtable(digits=4)
-
-Pseudo_R2_jet_95_QGAM_wind
-Pseudo_R2_jet_99_QGAM_wind
-Pseudo_R2_jet_95_QGAM_QREG_wind
-Pseudo_R2_jet_99_QGAM_QREG_wind
 
 Pseudo_R2_jet_95_QGAM_prec
 Pseudo_R2_jet_99_QGAM_prec
 Pseudo_R2_jet_95_QGAM_QREG_prec
 Pseudo_R2_jet_99_QGAM_QREG_prec
+
 
 
